@@ -26,6 +26,8 @@ public class Hangman : MonoBehaviour
     private string apiUrl;
 
     public string word;
+    public string recordId;
+    public List<string> recordIds;
     public int level;
 
     public TMP_InputField inputField;
@@ -91,10 +93,9 @@ public class Hangman : MonoBehaviour
 
                 if (records.Count > 0)
                 {
-                    string recordId = records[0]["id"].ToString();
                     string currentGuesses = records[0]["fields"]["Guesses"].ToString();
                     string newGuess = currentGuesses + ", " + _letter;
-                    StartCoroutine(UpdateUserGuess(recordId, newGuess));
+                    StartCoroutine(UpdateUserGuess(newGuess));
                     EnterGuess(newGuess);
                 }
                 else
@@ -109,7 +110,7 @@ public class Hangman : MonoBehaviour
     {
         string[] guessChars = _newGuess.Split(", ");
         string wordToGuess = word;
-        int misses = 0;
+        int misses = -1;
 
         foreach (string _char in guessChars)
         {
@@ -123,18 +124,110 @@ public class Hangman : MonoBehaviour
             }
         }
 
-        Debug.Log(wordToGuess + " \n" + misses + " misses so far");
+        if(wordToGuess == "")
+        {
+            Debug.Log("--------You Win!!-----");
+            level++;
+            StartCoroutine(GetRecordsFromAirtable());
+        }
+        else if(misses > 7)
+        {
+            Debug.Log("GAME OVER");
+        }
+        else
+        {
+            Debug.Log(wordToGuess + " \n" + misses + " misses so far");
+        }
     }
 
-    private IEnumerator UpdateUserGuess(string _recordId, string _newGuess)
+    private IEnumerator UpdateUserGuess(string _newGuess)
     {
-        string url = $"https://api.airtable.com/v0/{baseId}/{tableName}/{_recordId}";
+        string url = $"https://api.airtable.com/v0/{baseId}/{tableName}/{recordId}";
 
         var requestBody = new
         {
             fields = new
             {
                 Guesses = _newGuess
+            }
+        };
+
+        string jsonPayload = JsonConvert.SerializeObject(requestBody);
+        byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonPayload);
+
+        using (UnityWebRequest request = new UnityWebRequest(url, "PATCH"))
+        {
+            request.uploadHandler = new UploadHandlerRaw(bodyRaw);
+            request.downloadHandler = new DownloadHandlerBuffer();
+            request.SetRequestHeader("Authorization", $"Bearer {apiKey}");
+            request.SetRequestHeader("Content-Type", "application/json");
+
+            yield return request.SendWebRequest();
+
+            if (request.result == UnityWebRequest.Result.Success)
+            {
+                //Debug.Log("Successfully updated Airtable record: " + request.downloadHandler.text);
+            }
+            else
+            {
+                Debug.LogError("Error updating Airtable: " + request.error);
+            }
+        }
+    }
+
+    // Function to GET records from Airtable
+    IEnumerator GetRecordsFromAirtable()
+    {
+        string _level_url = $"https://api.airtable.com/v0/{baseId}/{tableName}?filterByFormula={{Level}}={level}";
+
+        using (UnityWebRequest webRequest = UnityWebRequest.Get(_level_url))
+        {
+            webRequest.SetRequestHeader("Authorization", "Bearer " + apiKey);
+            webRequest.SetRequestHeader("Content-Type", "application/json");
+
+            // Wait for the response
+            yield return webRequest.SendWebRequest();
+
+            if (webRequest.result == UnityWebRequest.Result.Success)
+            {
+                JObject jsonResponse = JObject.Parse(webRequest.downloadHandler.text);
+                Debug.Log($"{jsonResponse.ToString()}");
+                JArray records = (JArray)jsonResponse["records"];
+
+                if (records.Count > 0)
+                {
+                    recordId = records[0]["id"].ToString();
+                    recordIds.Add(recordId);
+                    string _recordId = records[0]["fields"]["Word"].ToString();
+                    word = _recordId;
+
+                    Debug.Log("Level " + level + ": " + word);
+                }
+
+            }
+            else
+            {
+                Debug.LogError("Error: " + webRequest.error);
+            }
+        }
+    }
+
+    private void OnApplicationQuit()
+    {
+        foreach(string id in recordIds)
+        {
+            StartCoroutine(EraseAllGuesses(id));
+        }
+    }
+
+    IEnumerator EraseAllGuesses(string _recordID) {
+        string url = $"https://api.airtable.com/v0/{baseId}/{tableName}/{_recordID}";
+
+        var requestBody = new
+        {
+            fields = new
+            {
+                Guesses = "0"
             }
         };
 
@@ -161,38 +254,6 @@ public class Hangman : MonoBehaviour
         }
     }
 
-    // Function to GET records from Airtable
-    IEnumerator GetRecordsFromAirtable()
-    {
-        string _level_url = $"https://api.airtable.com/v0/{baseId}/{tableName}?filterByFormula={{Level}}={1}";
-
-        using (UnityWebRequest webRequest = UnityWebRequest.Get(_level_url))
-        {
-            webRequest.SetRequestHeader("Authorization", "Bearer " + apiKey);
-            webRequest.SetRequestHeader("Content-Type", "application/json");
-
-            // Wait for the response
-            yield return webRequest.SendWebRequest();
-
-            if (webRequest.result == UnityWebRequest.Result.Success)
-            {
-                JObject jsonResponse = JObject.Parse(webRequest.downloadHandler.text);
-                Debug.Log($"{jsonResponse.ToString()}");
-                JArray records = (JArray)jsonResponse["records"];
-
-                if (records.Count > 0)
-                {
-                    string recordId = records[0]["fields"]["Word"].ToString();
-                    word = recordId;
-                }
-
-            }
-            else
-            {
-                Debug.LogError("Error: " + webRequest.error);
-            }
-        }
-    }
 
     private IEnumerator GetRecordId(string userName, int newScore)
     {
